@@ -23,7 +23,7 @@ parser.add_argument('--save', dest='save', type=str, default=None)
 parser.add_argument('--seed', dest='seed', type=int, default=1999)
 args = parser.parse_args()
 
-random_state = np.random.RandomState(args.seed)
+random_state = np.random.RandomState(415)
 
 def sample(e, mu1, mu2, std1, std2, rho):
 
