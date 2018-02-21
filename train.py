@@ -8,6 +8,11 @@ from collections import namedtuple
 from utils import next_experiment_path
 from batch_generator import BatchGenerator
 
+import logging
+import shutil
+from tfdllib import get_logger
+from tfdllib import Linear
+from tfdllib import TFLSTMCell
 
 tf.set_random_seed(2899)
 # TODO: add help info
@@ -24,6 +29,8 @@ args = parser.parse_args()
 
 epsilon = 1e-8
 
+h_dim = args.units
+random_state = np.random.RandomState(1442)
 
 class WindowLayer(object):
     def __init__(self, num_mixtures, sequence, num_letters):
@@ -36,12 +43,23 @@ class WindowLayer(object):
 
     def __call__(self, inputs, k, reuse=None):
         with tf.variable_scope('window', reuse=reuse):
+            alpha = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                           init="truncated_normal", name="window_alpha")
+            alpha = tf.exp(alpha)
+            beta = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                           init="truncated_normal", name="window_beta")
+            beta = tf.exp(beta)
+            kappa = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                           init="truncated_normal", name="window_kappa")
+            kappa = tf.exp(kappa)
+            """
             alpha = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
                                     kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='alpha')
             beta = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='beta')
             kappa = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
                                     kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='kappa')
+            """
 
             a = tf.expand_dims(alpha, axis=2)
             b = tf.expand_dims(beta, axis=2)
@@ -71,6 +89,21 @@ class MixtureLayer(object):
 
     def __call__(self, inputs, bias=0., reuse=None):
         with tf.variable_scope('mixture_output', reuse=reuse):
+            e = Linear([inputs], [h_dim], 1, random_state=random_state,
+                       init="truncated_normal", name="mdn_e")
+            pi = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                        init="truncated_normal", name="mdn_pi")
+            mu1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                         init="truncated_normal", name="mdn_mu1")
+            mu2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                         init="truncated_normal", name="mdn_mu2")
+            std1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                          init="truncated_normal", name="mdn_std1")
+            std2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                          init="truncated_normal", name="mdn_std2")
+            rho = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
+                         init="truncated_normal", name="mdn_rho")
+            """
             e = tf.layers.dense(inputs, 1,
                                 kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='e')
             pi = tf.layers.dense(inputs, self.num_mixtures,
@@ -85,7 +118,7 @@ class MixtureLayer(object):
                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='std2')
             rho = tf.layers.dense(inputs, self.num_mixtures,
                                   kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='rho')
-
+            """
             return tf.nn.sigmoid(e), \
                    tf.nn.softmax(pi * (1. + bias)), \
                    mu1, mu2, \
@@ -104,8 +137,11 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
         self.last_phi = None
 
         with tf.variable_scope('rnn', reuse=None):
+            """
             self.lstms = [tf.nn.rnn_cell.LSTMCell(num_units)
                           for _ in range(layers)]
+            """
+            self.lstms = [TFLSTMCell for _ in range(layers)]
             self.states = [tf.Variable(tf.zeros([batch_size, s]), trainable=False)
                            for s in self.state_size]
 
@@ -135,9 +171,17 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
             #noisy_inputs = tf.random_normal(shape=[args.batch_size, 3]) + inputs
             #x = tf.concat([noisy_inputs, window] + prev_output, axis=1)
             x = tf.concat([inputs, window] + prev_output, axis=1)
+            use_dim = 3 + self.num_letters if len(prev_output) == 0 else 3 + self.num_letters + h_dim
             with tf.variable_scope('lstm_{}'.format(layer)):
+                output, s = self.lstms[layer]([x], [use_dim], state[2 * layer], state[2 * layer + 1],
+                                              self.num_units, random_state=random_state,
+                                              name="h_{}".format(layer),
+                                              forget_bias_style="fill",
+                                              init="glorot_uniform")
+                """
                 output, s = self.lstms[layer](x, tf.nn.rnn_cell.LSTMStateTuple(state[2 * layer],
                                                                                state[2 * layer + 1]))
+                """
                 prev_output = [output]
             output_state += [si for si in s]
 
@@ -145,7 +189,6 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
                 window, k, self.last_phi, finish = self.window_layer(output, k)
 
         return output, output_state + [window, k, finish]
-
 
 def create_graph(num_letters, batch_size,
                  num_units=400, lstm_layers=3,
@@ -222,7 +265,7 @@ def create_graph(num_letters, batch_size,
                     learning_rate = tf.train.exponential_decay(0.001, steps, staircase=True,
                                                                decay_steps=10000, decay_rate=0.5)
 
-                    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+                    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, use_locking=True)
                     grad, var = zip(*optimizer.compute_gradients(loss))
                     grad, _ = tf.clip_by_global_norm(grad, 3.)
                     train_step = optimizer.apply_gradients(zip(grad, var), global_step=steps)
@@ -250,7 +293,7 @@ def main():
     num_epoch = args.epochs
     batches_per_epoch = 1000
 
-    batch_generator = BatchGenerator(batch_size, seq_len)
+    batch_generator = BatchGenerator(batch_size, seq_len, 2177)
     g, vs = create_graph(batch_generator.num_letters, batch_size,
                          num_units=args.units, lstm_layers=args.lstm_layers,
                          window_mixtures=args.window_mixtures,
@@ -268,12 +311,33 @@ def main():
             experiment_path = next_experiment_path()
             epoch = 0
 
+        logger = get_logger()
+        fh = logging.FileHandler(os.path.join(experiment_path, "experiment_run.log"))
+        fh.setLevel(logging.INFO)
+        logger.addHandler(fh)
+
+        logger.info(" ")
+        logger.info("Using experiment path {}".format(experiment_path))
+        logger.info(" ")
+        shutil.copy2(os.getcwd() + "/" + __file__, experiment_path)
+        shutil.copy2(os.getcwd() + "/" + "tfdllib.py", experiment_path)
+
+        for k, v in args.__dict__.items():
+            logger.info("argparse argument {} had value {}".format(k, v))
+
+        logger.info(" ")
+        logger.info("Model information")
+        for t_var in tf.trainable_variables():
+            logger.info(t_var)
+        logger.info(" ")
+
         summary_writer = tf.summary.FileWriter(experiment_path, graph=g, flush_secs=10)
         summary_writer.add_session_log(tf.SessionLog(status=tf.SessionLog.START),
                                        global_step=epoch * batches_per_epoch)
 
+        logger.info(" ")
         for e in range(epoch, num_epoch):
-            print('\nEpoch {}'.format(e))
+            logger.info("Epoch {}".format(e))
             for b in range(1, batches_per_epoch + 1):
                 coords, seq, reset, needed = batch_generator.next_batch()
 
@@ -284,6 +348,8 @@ def main():
                                               vs.sequence: seq})
                 summary_writer.add_summary(s, global_step=e * batches_per_epoch + b)
                 print('\r[{:5d}/{:5d}] loss = {}'.format(b, batches_per_epoch, l), end='')
+            logger.info("\n[{:5d}/{:5d}] loss = {}".format(b, batches_per_epoch, l))
+            logger.info(" ")
 
             model_saver.save(sess, os.path.join(experiment_path, 'models', 'model'),
                              global_step=e)
