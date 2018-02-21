@@ -557,7 +557,7 @@ def TFLSTMCell(list_of_inputs, list_of_input_dims,
                num_units, output_dim=None, random_state=None,
                name=None, init=None, scale="default",
                forget_bias=1.,
-               forget_bias_style="constant", strict=None):
+               forget_bias_style="fill", strict=None):
     # output is the thing to use in following layers, state is a tuple that feeds into the next call
     if random_state is None:
         raise ValueError("Must pass random_state")

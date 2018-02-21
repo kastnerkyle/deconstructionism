@@ -24,7 +24,7 @@ parser.add_argument('--save', dest='save', type=str, default=None)
 parser.add_argument('--seed', dest='seed', type=int, default=1999)
 args = parser.parse_args()
 
-random_state = np.random.RandomState(415)
+random_state = np.random.RandomState(args.seed)
 
 def sample(e, mu1, mu2, std1, std2, rho):
 
@@ -188,7 +188,16 @@ def main():
             #ax.set_title('Handwriting')
             ax.set_title(args.text)
             ax.set_aspect('equal')
-            plt.savefig("gen_plot.png")
+
+            for f in os.listdir("."):
+                if "gen_plot" in f and f.endswith(".png"):
+                    print("Removing old plot {}".format(f))
+                    os.remove(f)
+
+            t = int(time.time())
+            new = "gen_plot_{}.png".format(hash(t) % 10 ** 5)
+            print("Saving to {}".format(new))
+            plt.savefig(new)
             #plt.show()
 
 
