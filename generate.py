@@ -140,52 +140,67 @@ def main():
             x_grid, y_grid = np.meshgrid(x, y)
             z_grid = np.zeros_like(x_grid)
             for i in range(strokes.shape[0]):
+                # what
+                cov = np.array([[strokes[i, 2], 0.],
+                                [0., strokes[i, 3]]])
                 gauss = mlab.bivariate_normal(x_grid, y_grid, mux=strokes[i, 0], muy=strokes[i, 1],
-                                              sigmax=strokes[i, 2], sigmay=strokes[i, 3],
-                                              sigmaxy=strokes[i, 4])
+                                              sigmax=cov[0, 0], sigmay=cov[1, 1],
+                                              sigmaxy=strokes[i, 4] * cov[0, 0] * cov[1, 1])
+                # needs to be rho * sigmax * sigmay
                 z_grid += gauss * np.power(strokes[i, 2] + strokes[i, 3], 0.4) / (np.max(gauss) + epsilon)
 
-            fig, ax = plt.subplots(2, 2)
-
-            ax[0, 0].imshow(z_grid, interpolation='bilinear', aspect='auto', cmap=cm.jet)
-            ax[0, 0].grid(False)
-            ax[0, 0].set_title('Densities')
-            ax[0, 0].set_aspect('equal')
-
-            for stroke in split_strokes(cumsum(np.array(coords))):
-                ax[0, 1].plot(stroke[:, 0], -stroke[:, 1])
-            ax[0, 1].set_title('Handwriting')
-            ax[0, 1].set_aspect('equal')
-
-            phi_img = np.vstack(phi_data).T[::-1, :]
-            ax[1, 0].imshow(phi_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
-            ax[1, 0].set_yticks(np.arange(0, len(args_text) + 1))
-            ax[1, 0].set_yticklabels(list(' ' + args_text[::-1]), rotation='vertical', fontsize=8)
-            ax[1, 0].grid(False)
-            ax[1, 0].set_title('Phi')
-
-            window_img = np.vstack(window_data).T
-            ax[1, 1].imshow(window_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
-            ax[1, 1].set_yticks(np.arange(0, len(charset)))
-            ax[1, 1].set_yticklabels(list(charset), rotation='vertical', fontsize=8)
-            ax[1, 1].grid(False)
-            ax[1, 1].set_title('Window')
-
             for f in os.listdir("."):
-                if "gen_plot" in f and f.endswith(".png"):
+                if "plot" in f and f.endswith(".png"):
                     print("Removing old plot {}".format(f))
                     os.remove(f)
 
             t = int(time.time())
-            new = "gen_plot_{}.png".format(hash(t) % 10 ** 5)
-            print("Saving to {}".format(new))
-            plt.savefig(new)
-            #plt.show()
+            new = "plot_{}".format(hash(t) % 10 ** 5) + "_{}.png"
+            plt.figure()
+            plt.imshow(z_grid, interpolation="bilinear", cmap=cm.jet)
+            new_d = new.format("density")
+            plt.title("Density")
+            print("Saving to {}".format(new_d))
+            plt.savefig(new_d)
+            plt.close()
+
+            plt.figure()
+            for stroke in split_strokes(cumsum(np.array(coords))):
+                plt.plot(stroke[:, 0], -stroke[:, 1])
+            plt.title(args.text)
+            plt.axes().set_aspect('equal')
+            new_h = new.format("handwriting")
+            print("Saving to {}".format(new_h))
+            plt.savefig(new_h)
+            plt.close()
+
+            plt.figure()
+            phi_img = np.vstack(phi_data).T[::-1, :]
+            plt.imshow(phi_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
+            plt.yticks(np.arange(0, len(args_text) + 1))
+            plt.axes().set_yticklabels(list(' ' + args_text[::-1]), rotation='vertical', fontsize=8)
+            plt.grid(False)
+            plt.title('Phi')
+            new_p = new.format("phi")
+            print("Saving to {}".format(new_p))
+            plt.savefig(new_p)
+            plt.close()
+
+            plt.figure()
+            window_img = np.vstack(window_data).T
+            plt.imshow(window_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
+            plt.yticks(np.arange(0, len(charset)))
+            plt.axes().set_yticklabels(list(charset), rotation='vertical', fontsize=8)
+            plt.grid(False)
+            plt.title('Window')
+            new_w = new.format("window")
+            print("Saving to {}".format(new_w))
+            plt.savefig(new_w)
+            plt.close()
         else:
             fig, ax = plt.subplots(1, 1)
             for stroke in split_strokes(cumsum(np.array(coords))):
                 plt.plot(stroke[:, 0], -stroke[:, 1])
-            #ax.set_title('Handwriting')
             ax.set_title(args.text)
             ax.set_aspect('equal')
 
@@ -198,7 +213,6 @@ def main():
             new = "gen_plot_{}.png".format(hash(t) % 10 ** 5)
             print("Saving to {}".format(new))
             plt.savefig(new)
-            #plt.show()
 
 
 if __name__ == '__main__':
