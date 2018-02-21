@@ -45,6 +45,7 @@ def split_strokes(points):
         if points[e, 2] == 1.:
             strokes += [points[b: e + 1, :2].copy()]
             b = e + 1
+    strokes += [points[b: e + 1, :2].copy()]
     return strokes
 
 
@@ -96,7 +97,10 @@ def sample_text(sess, args_text, translation):
         coords += [coord]
         stroke_data += [[mu1[0, g], mu2[0, g], std1[0, g], std2[0, g], rho[0, g], coord[2]]]
 
-        if not args.force and finish[0, 0] > 0.8:
+        thresh = phi[:, -1] > 5 * np.max(phi[:, :-1])
+        #thresh = mu1.mean() > 1.1 * len(text)
+        #thresh = finish[0, 0] > 0.9
+        if not args.force and thresh:
             print('\nFinished sampling!\n')
             break
 

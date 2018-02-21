@@ -12,7 +12,7 @@ import logging
 import shutil
 from tfdllib import get_logger
 from tfdllib import Linear
-from tfdllib import TFLSTMCell
+from tfdllib import LSTMCell
 from tfdllib import BernoulliAndCorrelatedGMMCost
 
 tf.set_random_seed(2899)
@@ -144,7 +144,7 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
             self.lstms = [tf.nn.rnn_cell.LSTMCell(num_units)
                           for _ in range(layers)]
             """
-            self.lstms = [TFLSTMCell for _ in range(layers)]
+            self.lstms = [LSTMCell for _ in range(layers)]
             self.states = [tf.Variable(tf.zeros([batch_size, s]), trainable=False)
                            for s in self.state_size]
 
@@ -179,7 +179,6 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
                 output, s = self.lstms[layer]([x], [use_dim], state[2 * layer], state[2 * layer + 1],
                                               self.num_units, random_state=random_state,
                                               name="h_{}".format(layer),
-                                              forget_bias_style="fill",
                                               init=rnn_init)
                 """
                 output, s = self.lstms[layer](x, tf.nn.rnn_cell.LSTMStateTuple(state[2 * layer],

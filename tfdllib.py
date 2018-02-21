@@ -552,12 +552,11 @@ def SimpleRNNCell(list_of_inputs, list_of_input_dims, previous_hidden,
     return h_to_out, (h,)
 
 
-def TFLSTMCell(list_of_inputs, list_of_input_dims,
-               previous_hidden, previous_cell,
-               num_units, output_dim=None, random_state=None,
-               name=None, init=None, scale="default",
-               forget_bias=1.,
-               forget_bias_style="fill", strict=None):
+def LSTMCell(list_of_inputs, list_of_input_dims,
+             previous_hidden, previous_cell,
+             num_units, output_dim=None, random_state=None,
+             name=None, init=None, scale="default",
+             forget_bias=1., strict=None):
     # output is the thing to use in following layers, state is a tuple that feeds into the next call
     if random_state is None:
         raise ValueError("Must pass random_state")
@@ -587,13 +586,6 @@ def TFLSTMCell(list_of_inputs, list_of_input_dims,
                                     random_state=random_state,
                                     init=inp_init)
     comb_b_np, = make_numpy_biases([hidden_dim])
-    if forget_bias_style == "constant":
-        pass
-    elif forget_bias_style == "fill":
-        comb_b_np[num_units:2*num_units] = forget_bias
-        forget_bias = 0.
-    else:
-        raise ValueError("Unknown forget_bias_style {}".format(forget_bias_style))
 
     logger.info("LSTMCell {} input to hidden initialized using init {}".format(name, inp_init))
     logger.info("LSTMCell {} hidden to hidden initialized using init {}".format(name, h_init))
@@ -607,99 +599,6 @@ def TFLSTMCell(list_of_inputs, list_of_input_dims,
 
     c = tf.sigmoid(f + forget_bias) * previous_cell + tf.sigmoid(i) * tf.tanh(j)
     h = tf.sigmoid(o) * tf.tanh(c)
-
-    if output_dim is not None:
-        h_to_out_w_np, = make_numpy_weights(num_units, [output_dim],
-                                            random_state=random_state,
-                                            init=out_init)
-        h_to_out_b_np, = make_numpy_biases([output_dim])
-        h_to_out = Linear([h], [num_units], output_dim, random_state=random_state,
-                          name=name + "_lstm_h_to_out",
-                          init=(h_to_out_w_np, h_to_out_b_np), strict=strict)
-        final_out = h_to_out
-        logger.info("LSTMCell {} hidden to output initialized using init {}".format(name, out_init))
-    else:
-        final_out = h
-    return final_out, (h, c)
-
-
-def LSTMCell(list_of_inputs, list_of_input_dims,
-             previous_hidden, previous_cell,
-             num_units, output_dim=None, random_state=None,
-             name=None, init=None, scale="default", strict=None):
-    # output is the thing to use in following layers, state is a tuple that feeds into the next call
-    if random_state is None:
-        raise ValueError("Must pass random_state")
-
-    if name is None:
-        name = _get_name()
-
-    input_dim = sum(list_of_input_dims)
-    hidden_dim = 4 * num_units
-
-    if init is None or init == "truncated_normal":
-        inp_init = "truncated_normal"
-        h_init = "truncated_normal"
-        out_init = "truncated_normal"
-    elif init == "glorot_uniform":
-        inp_init = "glorot_uniform"
-        h_init = "glorot_uniform"
-        out_init = "glorot_uniform"
-    elif init == "normal":
-        inp_init = "normal"
-        h_init = "normal"
-        out_init = "normal"
-    else:
-        raise ValueError("Unknown init argument {}".format(init))
-
-    inp_to_pre_w_np, = make_numpy_weights(input_dim, [hidden_dim],
-                                          random_state=random_state,
-                                          init=inp_init)
-    inp_to_pre_b_np, = make_numpy_biases([hidden_dim])
-    # set forget gate bias to 1.
-    inp_to_pre_b_np[num_units:2*num_units] = 1.
-    inp_to_pre = Linear(list_of_inputs, list_of_input_dims, hidden_dim,
-                        random_state=random_state,
-                        name=name + "_lstm_inp_to_pre",
-                        init=(inp_to_pre_w_np, inp_to_pre_b_np), strict=strict)
-    logger.info("LSTMCell {} input to hidden initialized using init {}".format(name, inp_init))
-
-    if h_init == "ortho":
-        h_to_hpre_w_np_list = make_numpy_weights(num_units,
-                                                 [num_units, num_units, num_units, num_units],
-                                                 random_state=random_state,
-                                                 init=h_init)
-        h_to_hpre_w_np = np.concatenate(h_to_hpre_w_np_list, axis=-1)
-    else:
-        h_to_hpre_w_np, = make_numpy_weights(num_units, [hidden_dim],
-                                             random_state=random_state,
-                                             init=h_init)
-    logger.info("LSTMCell {} hidden to hidden initialized using init {}".format(name, h_init))
-
-    h_to_hpre = Linear([previous_hidden], [num_units], hidden_dim,
-                       random_state=random_state,
-                       name=name + "_lstm_h_to_hpre",
-                       init=(h_to_hpre_w_np,), biases=False, strict=strict)
-
-    def _slice(arr, i):
-        return arr[..., i * num_units:(i + 1) * num_units]
-
-    # local slice is better????
-    i_ = tf.nn.sigmoid(_slice(inp_to_pre, 0) + _slice(h_to_hpre, 0))
-    f_ = tf.nn.sigmoid(_slice(inp_to_pre, 1) + _slice(h_to_hpre, 1))
-    o_ = tf.nn.sigmoid(_slice(inp_to_pre, 2) + _slice(h_to_hpre, 2))
-    g_ = tf.nn.tanh(_slice(inp_to_pre, 3) + _slice(h_to_hpre, 3))
-
-    """
-    pre = inp_to_pre + h_to_hpre
-
-    i_ = tf.nn.sigmoid(_slice(pre, 0))
-    f_ = tf.nn.sigmoid(_slice(pre, 1))
-    o_ = tf.nn.sigmoid(_slice(pre, 2))
-    g_ = tf.nn.tanh(_slice(pre, 3))
-    """
-    c = previous_cell * f_ + g_ * i_
-    h = tf.nn.tanh(c) * o_
 
     if output_dim is not None:
         h_to_out_w_np, = make_numpy_weights(num_units, [output_dim],
