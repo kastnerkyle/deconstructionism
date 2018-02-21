@@ -603,11 +603,9 @@ def TFLSTMCell(list_of_inputs, list_of_input_dims,
                        name=name + "_lstm_proj",
                        init=(comb_w_np, comb_b_np), strict=strict)
 
-    def _slice(arr, i):
-        return arr[..., i * num_units:(i + 1) * num_units]
     i, j, f, o = tf.split(lstm_proj, 4, axis=-1)
 
-    c = tf.sigmoid(f + 1.) * previous_cell + tf.sigmoid(i) * tf.tanh(j)
+    c = tf.sigmoid(f + forget_bias) * previous_cell + tf.sigmoid(i) * tf.tanh(j)
     h = tf.sigmoid(o) * tf.tanh(c)
 
     if output_dim is not None:

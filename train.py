@@ -13,6 +13,7 @@ import shutil
 from tfdllib import get_logger
 from tfdllib import Linear
 from tfdllib import TFLSTMCell
+from tfdllib import BernoulliAndCorrelatedGMMCost
 
 tf.set_random_seed(2899)
 # TODO: add help info
@@ -30,6 +31,8 @@ args = parser.parse_args()
 epsilon = 1e-8
 
 h_dim = args.units
+forward_init = "truncated_normal"
+rnn_init = "truncated_normal"
 random_state = np.random.RandomState(1442)
 
 class WindowLayer(object):
@@ -44,13 +47,13 @@ class WindowLayer(object):
     def __call__(self, inputs, k, reuse=None):
         with tf.variable_scope('window', reuse=reuse):
             alpha = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init="truncated_normal", name="window_alpha")
+                           init=forward_init, name="window_alpha")
             alpha = tf.exp(alpha)
             beta = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init="truncated_normal", name="window_beta")
+                           init=forward_init, name="window_beta")
             beta = tf.exp(beta)
             kappa = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init="truncated_normal", name="window_kappa")
+                           init=forward_init, name="window_kappa")
             kappa = tf.exp(kappa)
             """
             alpha = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
@@ -90,19 +93,19 @@ class MixtureLayer(object):
     def __call__(self, inputs, bias=0., reuse=None):
         with tf.variable_scope('mixture_output', reuse=reuse):
             e = Linear([inputs], [h_dim], 1, random_state=random_state,
-                       init="truncated_normal", name="mdn_e")
+                       init=forward_init, name="mdn_e")
             pi = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                        init="truncated_normal", name="mdn_pi")
+                        init=forward_init, name="mdn_pi")
             mu1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init="truncated_normal", name="mdn_mu1")
+                         init=forward_init, name="mdn_mu1")
             mu2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init="truncated_normal", name="mdn_mu2")
+                         init=forward_init, name="mdn_mu2")
             std1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                          init="truncated_normal", name="mdn_std1")
+                          init=forward_init, name="mdn_std1")
             std2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                          init="truncated_normal", name="mdn_std2")
+                          init=forward_init, name="mdn_std2")
             rho = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init="truncated_normal", name="mdn_rho")
+                         init=forward_init, name="mdn_rho")
             """
             e = tf.layers.dense(inputs, 1,
                                 kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='e')
@@ -177,7 +180,7 @@ class RNNModel(tf.nn.rnn_cell.RNNCell):
                                               self.num_units, random_state=random_state,
                                               name="h_{}".format(layer),
                                               forget_bias_style="fill",
-                                              init="glorot_uniform")
+                                              init=rnn_init)
                 """
                 output, s = self.lstms[layer](x, tf.nn.rnn_cell.LSTMStateTuple(state[2 * layer],
                                                                                state[2 * layer + 1]))
@@ -234,6 +237,16 @@ def create_graph(num_letters, batch_size,
                         coords = tf.reshape(out_coords, [-1, 3])
                         xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
 
+                        cc = BernoulliAndCorrelatedGMMCost(e, pi,
+                                                           [mu1, mu2],
+                                                           [std1, std2],
+                                                           rho,
+                                                           es,
+                                                           [xs, ys],
+                                                           #coords[:, :1],
+                                                           #[coords[:, 1:2], coords[:, 2:]],
+                                                           name="cost")
+                        """
                         mrho = 1 - tf.square(rho) + 1E-6
                         xms = (xs - mu1) / std1
                         yms = (ys - mu2) / std2
@@ -243,6 +256,8 @@ def create_graph(num_letters, batch_size,
                         rp = tf.reduce_sum(pi * n, axis=1)
 
                         loss = tf.reduce_mean(-tf.log(rp + epsilon) - tf.log(ep + epsilon))
+                        """
+                        loss = tf.reduce_mean(cc)
 
                     if generate:
                         # save params for easier model loading and prediction

@@ -12,6 +12,7 @@ import matplotlib.mlab as mlab
 from matplotlib import animation
 #import seaborn
 from collections import namedtuple
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', dest='model_path', type=str, default=os.path.join('pretrained', 'model-29'))
@@ -169,7 +170,16 @@ def main():
             ax[1, 1].set_yticklabels(list(charset), rotation='vertical', fontsize=8)
             ax[1, 1].grid(False)
             ax[1, 1].set_title('Window')
-            plt.savefig("gen_plot.png")
+
+            for f in os.listdir("."):
+                if "gen_plot" in f and f.endswith(".png"):
+                    print("Removing old plot {}".format(f))
+                    os.remove(f)
+
+            t = int(time.time())
+            new = "gen_plot_{}.png".format(hash(t) % 10 ** 5)
+            print("Saving to {}".format(new))
+            plt.savefig(new)
             #plt.show()
         else:
             fig, ax = plt.subplots(1, 1)
