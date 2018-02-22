@@ -48,6 +48,10 @@ class BatchGenerator(object):
             self.batches[i] += self.seq_len
         return coords, sequence, reset_states, needed
 
+    def next_batch2(self):
+        r = self.next_batch()
+        return r[0].transpose(1, 0, 2), r[1].transpose(1, 0, 2), r[2], r[3]
+
     @staticmethod
     def load_dataset():
         dataset = np.load(os.path.join('data', 'dataset.npy'))

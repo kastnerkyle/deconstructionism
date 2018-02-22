@@ -638,8 +638,8 @@ def GaussianAttentionCell(list_of_step_inputs, list_of_step_input_dims,
     if check:
         raise ValueError("Unable to support step_input with n_dims != 2")
 
-    if init is None:
-        rnn_init = "glorot_uniform"
+    if init is None or init == "truncated_normal":
+        rnn_init = "truncated_normal"
         forward_init = "truncated_normal"
     else:
         raise ValueError("init != None not supported")

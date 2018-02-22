@@ -13,7 +13,9 @@ import shutil
 from tfdllib import get_logger
 from tfdllib import Linear
 from tfdllib import LSTMCell
+from tfdllib import GaussianAttentionCell
 from tfdllib import BernoulliAndCorrelatedGMMCost
+from tfdllib import scan
 
 tf.set_random_seed(2899)
 # TODO: add help info
@@ -34,163 +36,33 @@ h_dim = args.units
 forward_init = "truncated_normal"
 rnn_init = "truncated_normal"
 random_state = np.random.RandomState(1442)
-
-class WindowLayer(object):
-    def __init__(self, num_mixtures, sequence, num_letters):
-        self.sequence = sequence  # one-hot encoded sequence of characters -- [batch_size, length, num_letters]
-        self.seq_len = tf.shape(sequence)[1]
-        self.num_mixtures = num_mixtures
-        self.num_letters = num_letters
-        self.u_range = -tf.expand_dims(tf.expand_dims(tf.range(0., tf.cast(self.seq_len, dtype=tf.float32)), axis=0),
-                                       axis=0)
-
-    def __call__(self, inputs, k, reuse=None):
-        with tf.variable_scope('window', reuse=reuse):
-            alpha = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init=forward_init, name="window_alpha")
-            alpha = tf.exp(alpha)
-            beta = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init=forward_init, name="window_beta")
-            beta = tf.exp(beta)
-            kappa = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                           init=forward_init, name="window_kappa")
-            kappa = tf.exp(kappa)
-            """
-            alpha = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
-                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='alpha')
-            beta = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
-                                   kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='beta')
-            kappa = tf.layers.dense(inputs, self.num_mixtures, activation=tf.exp,
-                                    kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='kappa')
-            """
-
-            a = tf.expand_dims(alpha, axis=2)
-            b = tf.expand_dims(beta, axis=2)
-            k = tf.expand_dims(k + 1./25. * kappa, axis=2)
-
-            phi = tf.exp(-np.square(self.u_range + k) * b) * a  # [batch_size, mixtures, length]
-            phi = tf.reduce_sum(phi, axis=1, keep_dims=True)  # [batch_size, 1, length]
-
-            # whether or not network finished generating sequence
-            finish = tf.cast(phi[:, 0, -1] > tf.reduce_max(phi[:, 0, :-1], axis=1), tf.float32)
-
-            return tf.squeeze(tf.matmul(phi, self.sequence), axis=1), \
-                   tf.squeeze(k, axis=2), \
-                   tf.squeeze(phi, axis=1), \
-                   tf.expand_dims(finish, axis=1)
-
-    @property
-    def output_size(self):
-        return [self.num_letters, self.num_mixtures, 1]
+output_mixtures = args.output_mixtures
+window_mixtures = args.window_mixtures
+num_units = args.units
 
 
-class MixtureLayer(object):
-    def __init__(self, input_size, output_size, num_mixtures):
-        self.input_size = input_size
-        self.output_size = output_size
-        self.num_mixtures = num_mixtures
+def mixture(inputs, input_size, num_mixtures, bias, init="truncated_normal"):
+    forward_init = init
+    e = Linear([inputs], [input_size], 1, random_state=random_state,
+               init=forward_init, name="mdn_e")
+    pi = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                init=forward_init, name="mdn_pi")
+    mu1 = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                 init=forward_init, name="mdn_mu1")
+    mu2 = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                 init=forward_init, name="mdn_mu2")
+    std1 = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                  init=forward_init, name="mdn_std1")
+    std2 = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                  init=forward_init, name="mdn_std2")
+    rho = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
+                 init=forward_init, name="mdn_rho")
+    return tf.nn.sigmoid(e), \
+           tf.nn.softmax(pi * (1. + bias)), \
+           mu1, mu2, \
+           tf.exp(std1 - bias), tf.exp(std2 - bias), \
+           tf.nn.tanh(rho)
 
-    def __call__(self, inputs, bias=0., reuse=None):
-        with tf.variable_scope('mixture_output', reuse=reuse):
-            e = Linear([inputs], [h_dim], 1, random_state=random_state,
-                       init=forward_init, name="mdn_e")
-            pi = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                        init=forward_init, name="mdn_pi")
-            mu1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init=forward_init, name="mdn_mu1")
-            mu2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init=forward_init, name="mdn_mu2")
-            std1 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                          init=forward_init, name="mdn_std1")
-            std2 = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                          init=forward_init, name="mdn_std2")
-            rho = Linear([inputs], [h_dim], self.num_mixtures, random_state=random_state,
-                         init=forward_init, name="mdn_rho")
-            """
-            e = tf.layers.dense(inputs, 1,
-                                kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='e')
-            pi = tf.layers.dense(inputs, self.num_mixtures,
-                                 kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='pi')
-            mu1 = tf.layers.dense(inputs, self.num_mixtures,
-                                  kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='mu1')
-            mu2 = tf.layers.dense(inputs, self.num_mixtures,
-                                  kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='mu2')
-            std1 = tf.layers.dense(inputs, self.num_mixtures,
-                                   kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='std1')
-            std2 = tf.layers.dense(inputs, self.num_mixtures,
-                                   kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='std2')
-            rho = tf.layers.dense(inputs, self.num_mixtures,
-                                  kernel_initializer=tf.truncated_normal_initializer(stddev=0.075), name='rho')
-            """
-            return tf.nn.sigmoid(e), \
-                   tf.nn.softmax(pi * (1. + bias)), \
-                   mu1, mu2, \
-                   tf.exp(std1 - bias), tf.exp(std2 - bias), \
-                   tf.nn.tanh(rho)
-
-
-class RNNModel(tf.nn.rnn_cell.RNNCell):
-    def __init__(self, layers, num_units, input_size, num_letters, batch_size, window_layer):
-        super(RNNModel, self).__init__()
-        self.layers = layers
-        self.num_units = num_units
-        self.input_size = input_size
-        self.num_letters = num_letters
-        self.window_layer = window_layer
-        self.last_phi = None
-
-        with tf.variable_scope('rnn', reuse=None):
-            """
-            self.lstms = [tf.nn.rnn_cell.LSTMCell(num_units)
-                          for _ in range(layers)]
-            """
-            self.lstms = [LSTMCell for _ in range(layers)]
-            self.states = [tf.Variable(tf.zeros([batch_size, s]), trainable=False)
-                           for s in self.state_size]
-
-            self.zero_states = tf.group(*[sp.assign(sc)
-                                          for sp, sc in zip(self.states,
-                                                            self.zero_state(batch_size, dtype=tf.float32))])
-
-    @property
-    def state_size(self):
-        return [self.num_units] * self.layers * 2 + self.window_layer.output_size
-
-    @property
-    def output_size(self):
-        return [self.num_units]
-
-    def call(self, inputs, state, **kwargs):
-        # state[-3] --> window
-        # state[-2] --> k
-        # state[-1] --> finish
-        # state[2n] --> h
-        # state[2n+1] --> c
-        window, k, finish = state[-3:]
-        output_state = []
-        prev_output = []
-
-        for layer in range(self.layers):
-            #noisy_inputs = tf.random_normal(shape=[args.batch_size, 3]) + inputs
-            #x = tf.concat([noisy_inputs, window] + prev_output, axis=1)
-            x = tf.concat([inputs, window] + prev_output, axis=1)
-            use_dim = 3 + self.num_letters if len(prev_output) == 0 else 3 + self.num_letters + h_dim
-            with tf.variable_scope('lstm_{}'.format(layer)):
-                output, s = self.lstms[layer]([x], [use_dim], state[2 * layer], state[2 * layer + 1],
-                                              self.num_units, random_state=random_state,
-                                              name="h_{}".format(layer),
-                                              init=rnn_init)
-                """
-                output, s = self.lstms[layer](x, tf.nn.rnn_cell.LSTMStateTuple(state[2 * layer],
-                                                                               state[2 * layer + 1]))
-                """
-                prev_output = [output]
-            output_state += [si for si in s]
-
-            if layer == 0:
-                window, k, self.last_phi, finish = self.window_layer(output, k)
-
-        return output, output_state + [window, k, finish]
 
 def create_graph(num_letters, batch_size,
                  num_units=400, lstm_layers=3,
@@ -198,102 +70,174 @@ def create_graph(num_letters, batch_size,
     graph = tf.Graph()
     with graph.as_default():
         tf.set_random_seed(2899)
-        coordinates = tf.placeholder(tf.float32, shape=[None, None, 3])
-        sequence = tf.placeholder(tf.float32, shape=[None, None, num_letters])
-        reset = tf.placeholder(tf.float32, shape=[None, 1])
+        coordinates = tf.placeholder(tf.float32, shape=[None, batch_size, 3])
+        sequence = tf.placeholder(tf.float32, shape=[None, batch_size, num_letters])
         bias = tf.placeholder_with_default(tf.zeros(shape=[]), shape=[])
+        att_w_init = tf.placeholder(tf.float32, shape=[batch_size, num_letters])
+        att_k_init = tf.placeholder(tf.float32, shape=[batch_size, window_mixtures])
+        att_h_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
+        att_c_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
+        h1_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
+        c1_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
+        h2_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
+        c2_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
 
         def create_model(generate=None):
+            in_coords = coordinates[:-1, :, :]
+            out_coords = coordinates[1:, :, :]
+            """
             in_coords = coordinates[:, :-1, :]
             out_coords = coordinates[:, 1:, :]
+            """
 
             _batch_size = 1 if generate else batch_size
             if generate:
                 in_coords = coordinates
 
-            with tf.variable_scope('model', reuse=generate):
-                window = WindowLayer(num_mixtures=window_mixtures, sequence=sequence, num_letters=num_letters)
+            def step(inp_t, att_w_tm1, att_k_tm1, att_h_tm1, att_c_tm1,
+                     h1_tm1, c1_tm1, h2_tm1, c2_tm1):
 
-                rnn_model = RNNModel(layers=lstm_layers, num_units=num_units,
-                                     input_size=3, num_letters=num_letters,
-                                     window_layer=window, batch_size=_batch_size)
+                o = GaussianAttentionCell([inp_t], [3],
+                                          (att_h_tm1, att_c_tm1),
+                                          att_k_tm1,
+                                          sequence,
+                                          num_letters,
+                                          num_units,
+                                          att_w_tm1,
+                                          attention_scale = 1. / 25.,
+                                          name="att",
+                                          random_state=random_state,
+                                          init=rnn_init)
+                att_w_t, att_k_t, att_phi_t, s = o
+                att_h_t = s[0]
+                att_c_t = s[1]
 
-                reset_states = tf.group(*[state.assign(state * reset)
-                                          for state in rnn_model.states])
+                output, s = LSTMCell([inp_t, att_w_t, att_h_t],
+                                     [3, num_letters, num_units],
+                                     h1_tm1, c1_tm1, num_units,
+                                     random_state=random_state,
+                                     name="rnn1", init=rnn_init)
+                h1_t = s[0]
+                c1_t = s[1]
 
-                outs, states = tf.nn.dynamic_rnn(rnn_model, in_coords,
-                                                 initial_state=rnn_model.states)
+                output, s = LSTMCell([inp_t, att_w_t, h1_t],
+                                     [3, num_letters, num_units],
+                                     h2_tm1, c2_tm1, num_units,
+                                     random_state=random_state,
+                                     name="rnn2", init=rnn_init)
+                h2_t = s[0]
+                c2_t = s[1]
+                return output, att_w_t, att_k_t, att_phi_t, att_h_t, att_c_t, h1_t, c1_t, h2_t, c2_t
 
-                output_layer = MixtureLayer(input_size=num_units, output_size=2,
-                                            num_mixtures=output_mixtures)
+            r = scan(step,
+                     [in_coords],
+                     [None, att_w_init, att_k_init, None, att_h_init, att_c_init,
+                      h1_init, c1_init, h2_init, c2_init])
+            output = r[0]
+            att_w = r[1]
+            att_k = r[2]
+            att_phi = r[3]
+            att_h = r[4]
+            att_c = r[5]
+            h1 = r[6]
+            c1 = r[7]
+            h2 = r[8]
+            c2 = r[9]
 
-                with tf.control_dependencies([sp.assign(sc) for sp, sc in zip(rnn_model.states, states)]):
-                    with tf.name_scope('prediction'):
-                        outs = tf.reshape(outs, [-1, num_units])
-                        e, pi, mu1, mu2, std1, std2, rho = output_layer(outs, bias)
+            output = tf.reshape(output, [-1, num_units])
+            mo = mixture(output, num_units, output_mixtures, bias)
+            e, pi, mu1, mu2, std1, std2, rho = mo
 
-                    with tf.name_scope('loss'):
-                        coords = tf.reshape(out_coords, [-1, 3])
-                        xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
+            coords = tf.reshape(out_coords, [-1, 3])
+            xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
 
-                        cc = BernoulliAndCorrelatedGMMCost(e, pi,
-                                                           [mu1, mu2],
-                                                           [std1, std2],
-                                                           rho,
-                                                           es,
-                                                           [xs, ys],
-                                                           #coords[:, :1],
-                                                           #[coords[:, 1:2], coords[:, 2:]],
-                                                           name="cost")
-                        """
-                        mrho = 1 - tf.square(rho) + 1E-6
-                        xms = (xs - mu1) / std1
-                        yms = (ys - mu2) / std2
-                        z = tf.square(xms) + tf.square(yms) - 2. * rho * xms * yms
-                        n = 1. / (2. * np.pi * std1 * std2 * tf.sqrt(mrho)) * tf.exp(-z / (2. * mrho))
-                        ep = es * e + (1. - es) * (1. - e)
-                        rp = tf.reduce_sum(pi * n, axis=1)
+            cc = BernoulliAndCorrelatedGMMCost(e, pi,
+                                               [mu1, mu2],
+                                               [std1, std2],
+                                               rho,
+                                               es,
+                                               [xs, ys],
+                                               name="cost")
+            loss = tf.reduce_mean(cc)
 
-                        loss = tf.reduce_mean(-tf.log(rp + epsilon) - tf.log(ep + epsilon))
-                        """
-                        loss = tf.reduce_mean(cc)
+            if generate:
+                # save params for easier model loading and prediction
+                for param in [('coordinates', coordinates),
+                              ('sequence', sequence),
+                              ('bias', bias),
+                              ('e', e), ('pi', pi),
+                              ('mu1', mu1), ('mu2', mu2),
+                              ('std1', std1), ('std2', std2),
+                              ('rho', rho),
+                              ('window', att_w),
+                              ('kappa', att_k),
+                              ('phi', att_phi)]:
+                    tf.add_to_collection(*param)
 
-                    if generate:
-                        # save params for easier model loading and prediction
-                        for param in [('coordinates', coordinates),
-                                      ('sequence', sequence),
-                                      ('bias', bias),
-                                      ('e', e), ('pi', pi),
-                                      ('mu1', mu1), ('mu2', mu2),
-                                      ('std1', std1), ('std2', std2),
-                                      ('rho', rho),
-                                      ('phi', rnn_model.last_phi),
-                                      ('window', rnn_model.states[-3]),
-                                      ('kappa', rnn_model.states[-2]),
-                                      ('finish', rnn_model.states[-1]),
-                                      ('zero_states', rnn_model.zero_states)]:
-                            tf.add_to_collection(*param)
+            with tf.name_scope('training'):
+                steps = tf.Variable(0.)
+                learning_rate = tf.train.exponential_decay(0.001, steps, staircase=True,
+                                                           decay_steps=10000, decay_rate=0.5)
 
-                with tf.name_scope('training'):
-                    steps = tf.Variable(0.)
-                    learning_rate = tf.train.exponential_decay(0.001, steps, staircase=True,
-                                                               decay_steps=10000, decay_rate=0.5)
+                optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, use_locking=True)
+                grad, var = zip(*optimizer.compute_gradients(loss))
+                grad, _ = tf.clip_by_global_norm(grad, 3.)
+                train_step = optimizer.apply_gradients(zip(grad, var), global_step=steps)
 
-                    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, use_locking=True)
-                    grad, var = zip(*optimizer.compute_gradients(loss))
-                    grad, _ = tf.clip_by_global_norm(grad, 3.)
-                    train_step = optimizer.apply_gradients(zip(grad, var), global_step=steps)
+            with tf.name_scope('summary'):
+                # TODO: add more summaries
+                summary = tf.summary.merge([
+                    tf.summary.scalar('loss', loss)
+                ])
 
-                with tf.name_scope('summary'):
-                    # TODO: add more summaries
-                    summary = tf.summary.merge([
-                        tf.summary.scalar('loss', loss)
-                    ])
+            things_names = ["coordinates",
+                            "sequence",
+                            "att_w_init",
+                            "att_k_init",
+                            "att_h_init",
+                            "att_c_init",
+                            "h1_init",
+                            "c1_init",
+                            "h2_init",
+                            "c2_init",
+                            "att_w",
+                            "att_k",
+                            "att_phi",
+                            "att_h",
+                            "att_c",
+                            "h1",
+                            "c1",
+                            "h2",
+                            "c2",
+                            "loss",
+                            "train_step",
+                            "learning_rate",
+                            "summary"]
+            things_tf = [coordinates,
+                         sequence,
+                         att_w_init,
+                         att_k_init,
+                         att_h_init,
+                         att_c_init,
+                         h1_init,
+                         c1_init,
+                         h2_init,
+                         c2_init,
+                         att_w,
+                         att_k,
+                         att_phi,
+                         att_h,
+                         att_c,
+                         h1,
+                         c1,
+                         h2,
+                         c2,
+                         loss,
+                         train_step,
+                         learning_rate,
+                         summary]
+            return namedtuple('Model', things_names)(*things_tf)
 
-                return namedtuple('Model', ['coordinates', 'sequence', 'reset_states', 'reset', 'loss', 'train_step',
-                                            'learning_rate', 'summary'])(
-                           coordinates, sequence, reset_states, reset, loss, train_step, learning_rate, summary
-                       )
         train_model = create_model(generate=None)
         _ = create_model(generate=True)  # just to create ops for generation
 
@@ -350,16 +294,68 @@ def main():
                                        global_step=epoch * batches_per_epoch)
 
         logger.info(" ")
+
+        num_letters = batch_generator.num_letters
+        att_w_init_np = np.zeros((batch_size, num_letters))
+        att_k_init_np = np.zeros((batch_size, window_mixtures))
+        att_h_init_np = np.zeros((batch_size, num_units))
+        att_c_init_np = np.zeros((batch_size, num_units))
+        h1_init_np = np.zeros((batch_size, num_units))
+        c1_init_np = np.zeros((batch_size, num_units))
+        h2_init_np = np.zeros((batch_size, num_units))
+        c2_init_np = np.zeros((batch_size, num_units))
         for e in range(epoch, num_epoch):
             logger.info("Epoch {}".format(e))
             for b in range(1, batches_per_epoch + 1):
-                coords, seq, reset, needed = batch_generator.next_batch()
+                coords, seq, reset, needed = batch_generator.next_batch2()
 
                 if needed:
-                    sess.run(vs.reset_states, feed_dict={vs.reset: reset})
-                l, s, _ = sess.run([vs.loss, vs.summary, vs.train_step],
-                                   feed_dict={vs.coordinates: coords,
-                                              vs.sequence: seq})
+                    att_w_init *= reset
+                    att_k_init *= reset
+                    att_h_init *= reset
+                    att_c_init *= reset
+                    h1_init *= reset
+                    c1_init *= reset
+                    h2_init *= reset
+                    c2_init *= reset
+
+                feed = {vs.coordinates: coords,
+                        vs.sequence: seq,
+                        vs.att_w_init: att_w_init_np,
+                        vs.att_k_init: att_k_init_np,
+                        vs.att_h_init: att_h_init_np,
+                        vs.att_c_init: att_c_init_np,
+                        vs.h1_init: h1_init_np,
+                        vs.c1_init: c1_init_np,
+                        vs.h2_init: h2_init_np,
+                        vs.c2_init: c2_init_np}
+                outs = [vs.att_w, vs.att_k, vs.att_phi,
+                        vs.att_h, vs.att_c,
+                        vs.h1, vs.c1, vs.h2, vs.c2,
+                        vs.loss, vs.summary, vs.train_step]
+                r = sess.run(outs, feed_dict=feed)
+                att_w_np = r[0]
+                att_k_np = r[1]
+                att_phi_np = r[2]
+                att_h_np = r[3]
+                att_c_np = r[5]
+                h1_np = r[5]
+                c1_np = r[6]
+                h2_np = r[7]
+                c2_np = r[8]
+                l = r[-3]
+                s = r[-2]
+                _ = r[-1]
+
+                # set next inits
+                att_w_init = att_w_np[-1]
+                att_k_init = att_k_np[-1]
+                att_h_init = att_h_np[-1]
+                att_c_init = att_c_np[-1]
+                h1_init = h1_np[-1]
+                c1_init = c1_np[-1]
+                h2_init = h2_np[-1]
+                c2_init = c2_np[-1]
                 summary_writer.add_summary(s, global_step=e * batches_per_epoch + b)
                 print('\r[{:5d}/{:5d}] loss = {}'.format(b, batches_per_epoch, l), end='')
             logger.info("\n[{:5d}/{:5d}] loss = {}".format(b, batches_per_epoch, l))
