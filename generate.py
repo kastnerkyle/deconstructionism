@@ -149,6 +149,23 @@ def sample_text(sess, args_text, translation):
         h2 = o[14]
         c2 = o[15]
 
+        def _2d(a):
+            if len(a.shape) > 2:
+                if a.shape[0] == 1:
+                    return a[0]
+                else:
+                    raise ValueError("array is >2D, and dim 0 has more than 1 element! shape {}".format(a.shape))
+            else:
+                return a
+
+        e = _2d(e)
+        pi = _2d(pi)
+        mu1 = _2d(mu1)
+        mu2 = _2d(mu2)
+        std1 = _2d(std1)
+        std2 = _2d(std2)
+        rho = _2d(rho)
+
         kappa = att_k
         window = att_w
         phi = att_phi

@@ -166,9 +166,13 @@ def create_graph(num_letters, batch_size,
                                                es,
                                                [xs, ys],
                                                name="cost")
-            cc = in_coordinates_mask * cc
+            # mask + reduce_mean, slightly unstable
+            #cc = in_coordinates_mask * cc
             #loss = tf.reduce_mean(cc)
-            loss = tf.reduce_sum(cc / (tf.reduce_sum(in_coordinates_mask)))
+            # mask + true weighted, better (flat) but also unstable
+            #loss = tf.reduce_sum(cc / (tf.reduce_sum(in_coordinates_mask)))
+            # no mask on loss - 0s become a form of biasing / noise?
+            loss = tf.reduce_mean(cc)
 
             # save params for easier model loading and prediction
             for param in [('coordinates', coordinates),
