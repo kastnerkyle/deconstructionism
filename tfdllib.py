@@ -973,7 +973,136 @@ def LogitBernoulliAndCorrelatedLogitGMMCost(
     """
     return nll
 
+def BernoulliAndCorrelatedGMMCost(
+    bernoulli_values, coeff_values, mu_values_list, sigma_values_list,
+    corr_values, true_values_bernoulli, true_values_coord_list, name=None):
+    """
+    Bernoulli combined with correlated gaussian mixture model negative log
+    likelihood compared to true_values.
 
+    This is typically paired with BernoulliAndLogitGMM
+
+    Based on implementation from Junyoung Chung.
+
+    Parameters
+    ----------
+    bernoulli_values : tensor, shape
+        The predicted values out of some layer, normally a sigmoid layer
+    coeff_values : tensor, shape
+        The predicted values out of some layer, normally a softmax layer
+    mu_values_list: tensor, shape
+        The predicted values out of some layer, normally a linear layer
+    sigma_values_list: tensor, shape
+        list of predicted values out of some layer, normally an exp or softplus layer
+    corr_values: tensor, shape
+    true_values_bernoulli : tensor, shape[:-1]
+        Ground truth values. Must be the same shape as mu_values.shape[:-1],
+        assumes the bernoulli true values are on the first entry ([:, :, 0])
+    true_values_coords_list :
+    Returns
+    -------
+    nll : tensor, shape predicted_values.shape[1:]
+        The cost per sample, or per sample per step if 3D
+    References
+    ----------
+    [1] University of Utah Lectures
+        http://www.cs.utah.edu/~piyush/teaching/gmm.pdf
+    [2] Statlect.com
+        http://www.statlect.com/normal_distribution_maximum_likelihood.htm
+    """
+    if name == None:
+        name = _get_name()
+    else:
+        name = name
+
+    xs = true_values_coord_list[0]
+    ys = true_values_coord_list[1]
+    es = true_values_bernoulli
+    txs = shape(xs)
+    if txs[-1] != 1:
+        raise ValueError("Targets must be 1 dimensional")
+    tys = shape(ys)
+    tes = shape(es)
+    if tys != txs:
+        raise ValueError("Targets must have the same dimension")
+    if tes != txs:
+        raise ValueError("Targets must have the same dimension")
+
+    # seq length generally -1
+    batch_size = txs[1]
+    def _2d(a):
+        return tf.reshape(a, (-1, shape(a)[-1]))
+
+    true_values_bernoulli = _2d(true_values_bernoulli)
+    true_values_coord_list = [_2d(tvc) for tvc in true_values_coord_list]
+    coeff_values = _2d(coeff_values)
+    bernoulli_values = _2d(bernoulli_values)
+    corr_values = _2d(corr_values)
+    mu_values_list = [_2d(mv) for mv in mu_values_list]
+    sigma_values_list = [_2d(sv) for sv in sigma_values_list]
+
+    error_msg = "Dimension of variable {} not supported, got {}. Must be 2"
+    if len(shape(true_values_bernoulli)) != 2:
+        raise ValueError(error_msg.format("true_values_bernoulli", len(shape(true_values_bernoulli))))
+    elif any([len(shape(tvc)) != 2 for tvc in true_values_coord_list]):
+        raise ValueError(error_msg.format("true_values_coord_list", [len(shape(true_values_coord_list[0])), len(shape(truce_values_coord_list[1]))]))
+    elif len(shape(bernoulli_values)) != 2:
+        raise ValueError(error_msg.format("bernoulli_values", len(shape(bernoulli_values))))
+    elif len(shape(coeff_values)) != 2:
+        raise ValueError(error_msg.format("coeff_values", len(shape(coeff_values))))
+    elif any([len(shape(m)) != 2 for m in mu_values_list]):
+        raise ValueError(error_msg.format("mu_values", [len(shape(mu_values[0])), len(shape(mu_values_list[1]))]))
+    elif any([len(shape(s)) != 2 for s in sigma_values_list]):
+        raise ValueError(error_msg.format("sigma_values", [len(shape(sigma_values[0])), len(shape(sigma_values[1]))]))
+    elif len(shape(corr_values)) != 2:
+        raise ValueError(error_msg.format("corr_values", len(shape(corr_values))))
+
+
+    if len(true_values_coord_list) != 2:
+        raise ValueError("Only 2D GMM currently supported, got {} inputs in list for true coordinates".format(len(true_values_coord_list)))
+
+    if len(mu_values_list) != 2:
+        raise ValueError("Only 2D GMM currently supported, got {} inputs in list for mu values".format(len(true_values_coord_list)))
+
+    if len(sigma_values_list) != 2:
+        raise ValueError("Only 2D GMM currently supported, got {} inputs in list for sigma values".format(len(true_values_coord_list)))
+
+    mu_1 = mu_values_list[0]
+    mu_1 = tf.identity(mu_1, name=name + "_mu_1")
+    mu_2 = mu_values_list[1]
+    mu_2 = tf.identity(mu_2, name=name + "_mu_2")
+
+    corr_values = tf.identity(corr_values, name=name + "_corrs")
+
+    sigma_1 = sigma_values_list[0]
+    sigma_1 = tf.identity(sigma_1, name=name + "_sigma_1")
+    sigma_2 = sigma_values_list[1]
+    sigma_2 = tf.identity(sigma_2, name=name + "_sigma_2")
+
+    bernoulli_values = tf.identity(bernoulli_values, name=name + "_bernoullis")
+    coeff_values = tf.identity(coeff_values, name=name + "_coeffs")
+
+    true_0 = true_values_bernoulli
+    true_1 = true_values_coord_list[0]
+    true_2 = true_values_coord_list[1]
+
+    # don't be clever
+    buff = (1. - tf.square(corr_values)) + 1E-6
+    x_term = (true_1 - mu_1) / sigma_1
+    y_term = (true_2 - mu_2) / sigma_2
+
+    Z = tf.square(x_term) + tf.square(y_term) - 2. * corr_values * x_term * y_term
+    N = 1. / (2. * np.pi * sigma_1 * sigma_2 * tf.sqrt(buff)) * tf.exp(-Z / (2. * buff))
+    ep = true_0 * bernoulli_values + (1. - true_0) * (1. - bernoulli_values)
+    assert shape(ep)[-1] == 1
+    ep = ep[:, 0]
+    rp = tf.reduce_sum(coeff_values * N, axis=-1)
+    nll = -tf.log(rp + 1E-8) - tf.log(ep + 1E-8)
+    nll = tf.reshape(nll, (-1, batch_size))
+    return nll
+
+
+'''
 def BernoulliAndCorrelatedGMMCost(
     bernoulli_values, coeff_values, mu_values_list, sigma_values_list,
     corr_values, true_values_bernoulli, true_values_coord_list, name=None):
@@ -1062,3 +1191,4 @@ def BernoulliAndCorrelatedGMMCost(
     rp = tf.reduce_sum(coeff_values * N, axis=-1)
     nll = -tf.log(rp + 1E-8) - tf.log(ep + 1E-8)
     return nll
+'''

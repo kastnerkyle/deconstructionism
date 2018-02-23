@@ -58,7 +58,7 @@ def mixture(inputs, input_size, num_mixtures, bias, init="truncated_normal"):
     rho = Linear([inputs], [input_size], num_mixtures, random_state=random_state,
                  init=forward_init, name="mdn_rho")
     return tf.nn.sigmoid(e), \
-           tf.nn.softmax(pi * (1. + bias)), \
+           tf.nn.softmax(pi * (1. + bias), dim=-1), \
            mu1, mu2, \
            tf.exp(std1 - bias), tf.exp(std2 - bias), \
            tf.nn.tanh(rho)
@@ -148,12 +148,16 @@ def create_graph(num_letters, batch_size,
             h2 = r[8]
             c2 = r[9]
 
-            output = tf.reshape(output, [-1, num_units])
+            #output = tf.reshape(output, [-1, num_units])
             mo = mixture(output, num_units, output_mixtures, bias)
             e, pi, mu1, mu2, std1, std2, rho = mo
 
-            coords = tf.reshape(out_coordinates, [-1, 3])
-            xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
+            #coords = tf.reshape(out_coordinates, [-1, 3])
+            #xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
+
+            xs = out_coordinates[..., 0][..., None]
+            ys = out_coordinates[..., 1][..., None]
+            es = out_coordinates[..., 2][..., None]
 
             cc = BernoulliAndCorrelatedGMMCost(e, pi,
                                                [mu1, mu2],
@@ -162,7 +166,9 @@ def create_graph(num_letters, batch_size,
                                                es,
                                                [xs, ys],
                                                name="cost")
-            loss = tf.reduce_mean(cc)
+            cc = in_coordinates_mask * cc
+            #loss = tf.reduce_mean(cc)
+            loss = tf.reduce_sum(cc / (tf.reduce_sum(in_coordinates_mask)))
 
             # save params for easier model loading and prediction
             for param in [('coordinates', coordinates),

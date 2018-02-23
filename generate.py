@@ -55,7 +55,11 @@ def cumsum(points):
 
 
 def sample_text(sess, args_text, translation):
-    fields = ['in_coordinates', 'sequence', 'bias',
+    fields = ['in_coordinates',
+              'in_coordinates_mask',
+              'sequence',
+              'sequence_mask',
+              'bias',
               'e', 'pi', 'mu1', 'mu2', 'std1', 'std2', 'rho',
               'att_w_init', 'att_w',
               'att_k_init', 'att_k',
@@ -82,6 +86,7 @@ def sample_text(sess, args_text, translation):
     coord = np.array([0., 0., 1.])
     coord = coord[None] * bc
     coord = coord[None]
+    coord_mask = 0. * coord[:, :, 0] + 1.
     coords = [coord]
 
     sequence = np.eye(len(translation), dtype=np.float32)[text]
@@ -89,6 +94,7 @@ def sample_text(sess, args_text, translation):
     bs = np.ones((batch_size, 1, 1))
     sequence = bs * sequence
     sequence = sequence.transpose(1, 0, 2)
+    sequence_mask = 0. * sequence[:, :, 0] + 1.
 
     att_w_init_np = np.zeros((batch_size, num_letters))
     att_k_init_np = np.zeros((batch_size, window_mixtures))
@@ -104,7 +110,9 @@ def sample_text(sess, args_text, translation):
     for s in range(1, 60 * sequence_len + 1):
         print('\r[{:5d}] sampling... {}'.format(s, 'synthesis'), end='')
         feed = {vs.in_coordinates: coord, #np.array(coords)[:, 0],
+                vs.in_coordinates_mask: coord_mask,
                 vs.sequence: sequence,
+                vs.sequence_mask: sequence_mask,
                 vs.bias: args.bias,
                 vs.att_w_init: att_w_init_np, #*0
                 vs.att_k_init: att_k_init_np, #*0
@@ -235,6 +243,9 @@ def main():
             new = "plot_{}".format(hash(t) % 10 ** 5) + "_{}.png"
             plt.figure()
             plt.imshow(z_grid, interpolation="bilinear", cmap=cm.jet)
+            plt.axes().get_xaxis().set_visible(False)
+            plt.axes().get_yaxis().set_visible(False)
+            plt.axis("off")
             new_d = new.format("density")
             plt.title("Density")
             print("Saving to {}".format(new_d))
@@ -246,6 +257,10 @@ def main():
                 plt.plot(stroke[:, 0], -stroke[:, 1])
             plt.title(args.text)
             plt.axes().set_aspect('equal')
+            plt.axes().get_xaxis().set_visible(False)
+            plt.axes().get_yaxis().set_visible(False)
+            plt.axis("off")
+
             new_h = new.format("handwriting")
             print("Saving to {}".format(new_h))
             plt.savefig(new_h)
