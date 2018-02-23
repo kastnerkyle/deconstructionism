@@ -22,7 +22,8 @@ parser.add_argument('--force', dest='force', action='store_true', default=False)
 parser.add_argument('--noinfo', dest='info', action='store_false', default=True)
 parser.add_argument('--save', dest='save', type=str, default=None)
 parser.add_argument('--seed', dest='seed', type=int, default=1999)
-parser.add_argument('--stop_scale', dest='stop_scale', type=float, default=1.)
+parser.add_argument('--stop_scale', dest='stop_scale', type=float, default=7.5)
+parser.add_argument('--color', dest='color', type=str, default=None)
 args = parser.parse_args()
 
 random_state = np.random.RandomState(args.seed)
@@ -255,7 +256,10 @@ def main():
 
             plt.figure()
             for stroke in split_strokes(cumsum(np.array(coords))):
-                plt.plot(stroke[:, 0], -stroke[:, 1])
+                if args.color is not None:
+                    plt.plot(stroke[:, 0], -stroke[:, 1], color=args.color)
+                else:
+                    plt.plot(stroke[:, 0], -stroke[:, 1])
             plt.title(args.text)
             plt.axes().set_aspect('equal')
             plt.axes().get_xaxis().set_visible(False)
@@ -293,7 +297,10 @@ def main():
         else:
             fig, ax = plt.subplots(1, 1)
             for stroke in split_strokes(cumsum(np.array(coords))):
-                plt.plot(stroke[:, 0], -stroke[:, 1])
+                if args.color is not None:
+                    plt.plot(stroke[:, 0], -stroke[:, 1], color=args.color)
+                else:
+                    plt.plot(stroke[:, 0], -stroke[:, 1])
             ax.set_title(args.text)
             ax.set_aspect('equal')
 
