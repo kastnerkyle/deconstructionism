@@ -22,6 +22,7 @@ parser.add_argument('--force', dest='force', action='store_true', default=False)
 parser.add_argument('--noinfo', dest='info', action='store_false', default=True)
 parser.add_argument('--save', dest='save', type=str, default=None)
 parser.add_argument('--seed', dest='seed', type=int, default=1999)
+parser.add_argument('--stop_scale', dest='stop_scale', type=float, default=1.)
 args = parser.parse_args()
 
 random_state = np.random.RandomState(args.seed)
@@ -177,7 +178,7 @@ def sample_text(sess, args_text, translation):
         h2_init_np = h2[-1]
         c2_init_np = c2[-1]
 
-        thresh = phi[-1, choose_i, -1] > 7.5 * np.max(phi[-1, choose_i, :-1])
+        thresh = phi[-1, choose_i, -1] > args.stop_scale * np.max(phi[-1, choose_i, :-1])
         #thresh = mu1.mean() > 1.1 * len(text)
         #thresh = finish[0, 0] > 0.9
 
