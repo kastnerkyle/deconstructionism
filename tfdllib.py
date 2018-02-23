@@ -554,7 +554,10 @@ def SimpleRNNCell(list_of_inputs, list_of_input_dims, previous_hidden,
 
 def LSTMCell(list_of_inputs, list_of_input_dims,
              previous_hidden, previous_cell,
-             num_units, output_dim=None, random_state=None,
+             num_units,
+             output_dim=None,
+             input_mask=None,
+             random_state=None,
              name=None, init=None, scale="default",
              forget_bias=1., strict=None):
     # output is the thing to use in following layers, state is a tuple that feeds into the next call
@@ -598,7 +601,12 @@ def LSTMCell(list_of_inputs, list_of_input_dims,
     i, j, f, o = tf.split(lstm_proj, 4, axis=-1)
 
     c = tf.sigmoid(f + forget_bias) * previous_cell + tf.sigmoid(i) * tf.tanh(j)
+    if input_mask is not None:
+        c = input_mask[:, None] * c + (1. - input_mask[:, None]) * previous_cell
+
     h = tf.sigmoid(o) * tf.tanh(c)
+    if input_mask is not None:
+        h = input_mask[:, None] * h + (1. - input_mask[:, None]) * h
 
     if output_dim is not None:
         h_to_out_w_np, = make_numpy_weights(num_units, [output_dim],
@@ -626,6 +634,8 @@ def GaussianAttentionCell(list_of_step_inputs, list_of_step_input_dims,
                           attention_scale=1.,
                           cell_type="lstm",
                           name=None,
+                          input_mask=None,
+                          conditioning_mask=None,
                           random_state=None, strict=None, init=None):
     #returns w_t, k_t, phi_t, state
     # where state is the state tuple retruned by the inner cell_type
@@ -650,7 +660,9 @@ def GaussianAttentionCell(list_of_step_inputs, list_of_step_input_dims,
         att_rnn_out, state = LSTMCell(list_of_step_inputs + [previous_attention_weight],
                                       list_of_step_input_dims + [full_conditioning_tensor_dim],
                                       previous_state_list[0], previous_state_list[1],
-                                      num_units, random_state=random_state,
+                                      num_units,
+                                      input_mask=input_mask,
+                                      random_state=random_state,
                                       name=name + "_gauss_att_lstm",
                                       init=rnn_init)
     else:
@@ -668,6 +680,7 @@ def GaussianAttentionCell(list_of_step_inputs, list_of_step_input_dims,
     k_tm1 = previous_attention_position
     cond_dim = full_conditioning_tensor_dim
     ctx = full_conditioning_tensor
+    ctx_mask = conditioning_mask
 
     """
     ctx = Linear(
@@ -702,11 +715,39 @@ def GaussianAttentionCell(list_of_step_inputs, list_of_step_input_dims,
     phi_t = calc_phi(k_t, a_t, b_t, u)
     phi_t = tf.identity(phi_t, name=name + "_phi")
 
-    # calculate and return stopping criteria
-    #sh_t = calc_phi(k_t, a_t, b_t, u_max)
-    # mask using conditioning mask?
-    #w_t = phi_t * tf.transpose(ctx, (1, 0, 2)) * tf.transpose(tf.expand_dims(ctx_mask, axis=2), (1, 0, 2))
-    w_t = tf.matmul(phi_t, tf.transpose(ctx, (1, 0, 2)))
+    """
+        # Notes from pytorch tests
+        # sanity check shapes for proper equivalent to np.dot
+        aaaa = np.random.randn(50, 1, 46)
+        bbbb = np.random.randn(50, 46, 400)
+        r = np.matmul(aaaa, bbbb)
+        # r has shape ms, 1, embed_dim
+        # since aaaa and bbbb are > 2d, treated as stack of matrices, matrix dims on last 2 axes
+        # this means 50, 1, 46 x 50, 46, 400 is 50 reps of 1, 46 x 46, 400
+        # leaving shape 50, 1, 400
+        # equivalent to dot for 1 matrix is is (aaaa[0][:, :, None] * bbbb[0][None, :, :]).sum(axis=-2)
+        # so for all 50, (aaaa[:, :, :, None] * bbbb[:, None, :, :]).sum(axis=-2)
+        # ((aaaa[:, :, :, None] * bbbb[:, None, :, :]).sum(axis=-2) == r).all()
+        _a = Variable(th.FloatTensor(aaaa))
+        _b = Variable(th.FloatTensor(bbbb))
+        e_a = _a[:, :, :, None].expand(_a.size(0), _a.size(1), _a.size(2), _b.size(2))
+        e_b = _b[:, None, :, :].expand(_b.size(0), _a.size(1), _b.size(1), _b.size(2))
+        # In [17]: np.sum(((e_a * e_b).sum(dim=-2)[:, :, 0].data.numpy() - r) ** 2)
+        # Out[17]: 1.6481219193765024e-08
+        # equivalent to comb = th.matmul(phi, c), for backwards compat
+        e_phi = phi[:, :, :, None].expand(phi.size(0), phi.size(1), phi.size(2), c.size(2))
+        e_c = c[:, None, :, :].expand(c.size(0), phi.size(1), c.size(1), c.size(2))
+        comb = (e_phi * e_c).sum(dim=-2)[:, :, 0]
+        # comb has shape minibatch_size, 1, embed_size
+        # w_t has shape minibatch_size, embed_size
+        w_t = comb[:, 0, :]
+    """
+    if conditioning_mask is not None:
+        w_t_pre = phi_t * tf.transpose(ctx, (1, 2, 0))
+        w_t_masked = w_t_pre * (tf.transpose(ctx_mask, (1, 0))[:, None])
+        w_t = tf.reduce_sum(w_t_masked, axis=-1)[:, None]
+    else:
+        w_t = tf.matmul(phi_t, tf.transpose(ctx, (1, 0, 2)))
     phi_t = phi_t[:, 0]
     w_t = w_t[:, 0]
     w_t = tf.identity(w_t, name=name + "_post_weighting")

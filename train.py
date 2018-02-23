@@ -70,8 +70,13 @@ def create_graph(num_letters, batch_size,
     graph = tf.Graph()
     with graph.as_default():
         tf.set_random_seed(2899)
+
         coordinates = tf.placeholder(tf.float32, shape=[None, batch_size, 3])
+        coordinates_mask = tf.placeholder(tf.float32, shape=[None, batch_size])
+
         sequence = tf.placeholder(tf.float32, shape=[None, batch_size, num_letters])
+        sequence_mask = tf.placeholder(tf.float32, shape=[None, batch_size])
+
         bias = tf.placeholder_with_default(tf.zeros(shape=[]), shape=[])
         att_w_init = tf.placeholder(tf.float32, shape=[batch_size, num_letters])
         att_k_init = tf.placeholder(tf.float32, shape=[batch_size, window_mixtures])
@@ -84,9 +89,12 @@ def create_graph(num_letters, batch_size,
 
         def create_model(generate=None):
             in_coordinates = coordinates[:-1, :, :]
+            in_coordinates_mask = coordinates_mask[:-1]
             out_coordinates = coordinates[1:, :, :]
+            out_coordinates_mask = coordinates_mask[1:]
 
-            def step(inp_t, att_w_tm1, att_k_tm1, att_h_tm1, att_c_tm1,
+            def step(inp_t, inp_mask_t,
+                     att_w_tm1, att_k_tm1, att_h_tm1, att_c_tm1,
                      h1_tm1, c1_tm1, h2_tm1, c2_tm1):
 
                 o = GaussianAttentionCell([inp_t], [3],
@@ -96,6 +104,8 @@ def create_graph(num_letters, batch_size,
                                           num_letters,
                                           num_units,
                                           att_w_tm1,
+                                          input_mask=inp_mask_t,
+                                          conditioning_mask=sequence_mask,
                                           attention_scale = 1. / 25.,
                                           name="att",
                                           random_state=random_state,
@@ -107,6 +117,7 @@ def create_graph(num_letters, batch_size,
                 output, s = LSTMCell([inp_t, att_w_t, att_h_t],
                                      [3, num_letters, num_units],
                                      h1_tm1, c1_tm1, num_units,
+                                     input_mask=inp_mask_t,
                                      random_state=random_state,
                                      name="rnn1", init=rnn_init)
                 h1_t = s[0]
@@ -115,6 +126,7 @@ def create_graph(num_letters, batch_size,
                 output, s = LSTMCell([inp_t, att_w_t, h1_t],
                                      [3, num_letters, num_units],
                                      h2_tm1, c2_tm1, num_units,
+                                     input_mask=inp_mask_t,
                                      random_state=random_state,
                                      name="rnn2", init=rnn_init)
                 h2_t = s[0]
@@ -122,7 +134,7 @@ def create_graph(num_letters, batch_size,
                 return output, att_w_t, att_k_t, att_phi_t, att_h_t, att_c_t, h1_t, c1_t, h2_t, c2_t
 
             r = scan(step,
-                     [in_coordinates],
+                     [in_coordinates, in_coordinates_mask],
                      [None, att_w_init, att_k_init, None, att_h_init, att_c_init,
                       h1_init, c1_init, h2_init, c2_init])
             output = r[0]
@@ -156,7 +168,11 @@ def create_graph(num_letters, batch_size,
             for param in [('coordinates', coordinates),
                           ('in_coordinates', in_coordinates),
                           ('out_coordinates', out_coordinates),
+                          ('coordinates_mask', coordinates_mask),
+                          ('in_coordinates_mask', in_coordinates_mask),
+                          ('out_coordinates_mask', out_coordinates_mask),
                           ('sequence', sequence),
+                          ('sequence_mask', sequence_mask),
                           ('bias', bias),
                           ('e', e), ('pi', pi),
                           ('mu1', mu1), ('mu2', mu2),
@@ -198,7 +214,9 @@ def create_graph(num_letters, batch_size,
                 ])
 
             things_names = ["coordinates",
+                            "coordinates_mask",
                             "sequence",
+                            "sequence_mask",
                             "att_w_init",
                             "att_k_init",
                             "att_h_init",
@@ -221,7 +239,9 @@ def create_graph(num_letters, batch_size,
                             "learning_rate",
                             "summary"]
             things_tf = [coordinates,
+                         coordinates_mask,
                          sequence,
+                         sequence_mask,
                          att_w_init,
                          att_k_init,
                          att_h_init,
@@ -249,6 +269,18 @@ def create_graph(num_letters, batch_size,
         _ = create_model(generate=True)  # just to create ops for generation
 
     return graph, train_model
+
+
+def make_mask(arr):
+    mask = np.ones_like(arr[:, :, 0])
+    last_step = arr.shape[0] * arr[0, :, 0]
+    for mbi in range(arr.shape[1]):
+        for step in range(arr.shape[0]):
+            if arr[step:, mbi].min() == 0. and arr[step:, mbi].max() == 0.:
+                last_step[mbi] = step
+                mask[step:, mbi] = 0.
+                break
+    return mask
 
 
 def main():
@@ -315,6 +347,8 @@ def main():
             logger.info("Epoch {}".format(e))
             for b in range(1, batches_per_epoch + 1):
                 coords, seq, reset, needed = batch_generator.next_batch2()
+                coords_mask = make_mask(coords)
+                seq_mask = make_mask(seq)
 
                 if needed:
                     att_w_init *= reset
@@ -327,7 +361,9 @@ def main():
                     c2_init *= reset
 
                 feed = {vs.coordinates: coords,
+                        vs.coordinates_mask: coords_mask,
                         vs.sequence: seq,
+                        vs.sequence_mask: seq_mask,
                         vs.att_w_init: att_w_init_np,
                         vs.att_k_init: att_k_init_np,
                         vs.att_h_init: att_h_init_np,
