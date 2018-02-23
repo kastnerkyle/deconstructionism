@@ -83,16 +83,8 @@ def create_graph(num_letters, batch_size,
         c2_init = tf.placeholder(tf.float32, shape=[batch_size, num_units])
 
         def create_model(generate=None):
-            in_coords = coordinates[:-1, :, :]
-            out_coords = coordinates[1:, :, :]
-            """
-            in_coords = coordinates[:, :-1, :]
-            out_coords = coordinates[:, 1:, :]
-            """
-
-            _batch_size = 1 if generate else batch_size
-            if generate:
-                in_coords = coordinates
+            in_coordinates = coordinates[:-1, :, :]
+            out_coordinates = coordinates[1:, :, :]
 
             def step(inp_t, att_w_tm1, att_k_tm1, att_h_tm1, att_c_tm1,
                      h1_tm1, c1_tm1, h2_tm1, c2_tm1):
@@ -130,7 +122,7 @@ def create_graph(num_letters, batch_size,
                 return output, att_w_t, att_k_t, att_phi_t, att_h_t, att_c_t, h1_t, c1_t, h2_t, c2_t
 
             r = scan(step,
-                     [in_coords],
+                     [in_coordinates],
                      [None, att_w_init, att_k_init, None, att_h_init, att_c_init,
                       h1_init, c1_init, h2_init, c2_init])
             output = r[0]
@@ -148,7 +140,7 @@ def create_graph(num_letters, batch_size,
             mo = mixture(output, num_units, output_mixtures, bias)
             e, pi, mu1, mu2, std1, std2, rho = mo
 
-            coords = tf.reshape(out_coords, [-1, 3])
+            coords = tf.reshape(out_coordinates, [-1, 3])
             xs, ys, es = tf.unstack(tf.expand_dims(coords, axis=2), axis=1)
 
             cc = BernoulliAndCorrelatedGMMCost(e, pi,
@@ -160,19 +152,34 @@ def create_graph(num_letters, batch_size,
                                                name="cost")
             loss = tf.reduce_mean(cc)
 
-            if generate:
-                # save params for easier model loading and prediction
-                for param in [('coordinates', coordinates),
-                              ('sequence', sequence),
-                              ('bias', bias),
-                              ('e', e), ('pi', pi),
-                              ('mu1', mu1), ('mu2', mu2),
-                              ('std1', std1), ('std2', std2),
-                              ('rho', rho),
-                              ('window', att_w),
-                              ('kappa', att_k),
-                              ('phi', att_phi)]:
-                    tf.add_to_collection(*param)
+            # save params for easier model loading and prediction
+            for param in [('coordinates', coordinates),
+                          ('in_coordinates', in_coordinates),
+                          ('out_coordinates', out_coordinates),
+                          ('sequence', sequence),
+                          ('bias', bias),
+                          ('e', e), ('pi', pi),
+                          ('mu1', mu1), ('mu2', mu2),
+                          ('std1', std1), ('std2', std2),
+                          ('rho', rho),
+                          ('att_w_init', att_w_init),
+                          ('att_k_init', att_k_init),
+                          ('att_h_init', att_h_init),
+                          ('att_c_init', att_c_init),
+                          ('h1_init', h1_init),
+                          ('c1_init', c1_init),
+                          ('h2_init', h2_init),
+                          ('c2_init', c2_init),
+                          ('att_w', att_w),
+                          ('att_k', att_k),
+                          ('att_phi', att_phi),
+                          ('att_h', att_h),
+                          ('att_c', att_c),
+                          ('h1', h1),
+                          ('c1', c1),
+                          ('h2', h2),
+                          ('c2', c2)]:
+                tf.add_to_collection(*param)
 
             with tf.name_scope('training'):
                 steps = tf.Variable(0.)

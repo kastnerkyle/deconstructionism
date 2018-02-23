@@ -55,58 +55,131 @@ def cumsum(points):
 
 
 def sample_text(sess, args_text, translation):
-    fields = ['coordinates', 'sequence', 'bias', 'e', 'pi', 'mu1', 'mu2', 'std1', 'std2',
-              'rho', 'window', 'kappa', 'phi', 'finish', 'zero_states']
+    fields = ['in_coordinates', 'sequence', 'bias',
+              'e', 'pi', 'mu1', 'mu2', 'std1', 'std2', 'rho',
+              'att_w_init', 'att_w',
+              'att_k_init', 'att_k',
+              'att_h_init', 'att_h',
+              'att_c_init', 'att_c',
+              'h1_init', 'h1',
+              'c1_init', 'c1',
+              'h2_init', 'h2',
+              'c2_init', 'c2',
+              'att_phi']
     vs = namedtuple('Params', fields)(
         *[tf.get_collection(name)[0] for name in fields]
     )
 
     text = np.array([translation.get(c, 0) for c in args_text])
+
+    num_letters = len(translation)
+    num_units = 400
+    window_mixtures = 10
+    output_mixtures = 20
+    batch_size = 64
+    choose_i = 0
+    bc = np.ones((batch_size, 1))
     coord = np.array([0., 0., 1.])
+    coord = coord[None] * bc
+    coord = coord[None]
     coords = [coord]
 
-    # Prime the model with the author style if requested
     sequence = np.eye(len(translation), dtype=np.float32)[text]
     sequence = np.expand_dims(np.concatenate([sequence, np.zeros((1, len(translation)))]), axis=0)
+    bs = np.ones((batch_size, 1, 1))
+    sequence = bs * sequence
+    sequence = sequence.transpose(1, 0, 2)
+
+    att_w_init_np = np.zeros((batch_size, num_letters))
+    att_k_init_np = np.zeros((batch_size, window_mixtures))
+    att_h_init_np = np.zeros((batch_size, num_units))
+    att_c_init_np = np.zeros((batch_size, num_units))
+    h1_init_np = np.zeros((batch_size, num_units))
+    c1_init_np = np.zeros((batch_size, num_units))
+    h2_init_np = np.zeros((batch_size, num_units))
+    c2_init_np = np.zeros((batch_size, num_units))
 
     phi_data, window_data, kappa_data, stroke_data = [], [], [], []
-    sess.run(vs.zero_states)
     sequence_len = len(args_text)
     for s in range(1, 60 * sequence_len + 1):
-
         print('\r[{:5d}] sampling... {}'.format(s, 'synthesis'), end='')
+        feed = {vs.in_coordinates: coord, #np.array(coords)[:, 0],
+                vs.sequence: sequence,
+                vs.bias: args.bias,
+                vs.att_w_init: att_w_init_np, #*0
+                vs.att_k_init: att_k_init_np, #*0
+                vs.att_h_init: att_h_init_np, #*0
+                vs.att_c_init: att_c_init_np, #*0
+                vs.h1_init: h1_init_np, #*0
+                vs.c1_init: c1_init_np, #*0
+                vs.h2_init: h2_init_np, #*0
+                vs.c2_init: c2_init_np} #*0
 
-        e, pi, mu1, mu2, std1, std2, rho, \
-        finish, phi, window, kappa = sess.run([vs.e, vs.pi, vs.mu1, vs.mu2,
-                                               vs.std1, vs.std2, vs.rho, vs.finish,
-                                               vs.phi, vs.window, vs.kappa],
-                                              feed_dict={
-                                                  vs.coordinates: coord[None, None, ...],
-                                                  vs.sequence: sequence,
-                                                  vs.bias: args.bias
-                                              })
+        o = sess.run([vs.e, vs.pi, vs.mu1, vs.mu2,
+                     vs.std1, vs.std2, vs.rho,
+                     vs.att_w, vs.att_k, vs.att_phi,
+                     vs.att_h, vs.att_c,
+                     vs.h1, vs.c1,
+                     vs.h2, vs.c2],
+                     feed_dict=feed)
+        e = o[0]
+        pi = o[1]
+        mu1 = o[2]
+        mu2 = o[3]
+        std1 = o[4]
+        std2 = o[5]
+        rho = o[6]
+        att_w = o[7]
+        att_k = o[8]
+        att_phi = o[9]
+        att_h = o[10]
+        att_c = o[11]
+        h1 = o[12]
+        c1 = o[13]
+        h2 = o[14]
+        c2 = o[15]
+
+        kappa = att_k
+        window = att_w
+        phi = att_phi
 
         # Synthesis mode
-        phi_data += [phi[0, :]]
-        window_data += [window[0, :]]
-        kappa_data += [kappa[0, :]]
+        phi_data += [phi[-1, choose_i, :]]
+        window_data += [window[-1, choose_i, :]]
+        kappa_data += [kappa[-1, choose_i, :]]
         # ---
-        g = random_state.choice(np.arange(pi.shape[1]), p=pi[0])
-        coord = sample(e[0, 0], mu1[0, g], mu2[0, g],
-                       std1[0, g], std2[0, g], rho[0, g])
-        coords += [coord]
-        stroke_data += [[mu1[0, g], mu2[0, g], std1[0, g], std2[0, g], rho[0, g], coord[2]]]
+        g = random_state.choice(np.arange(pi.shape[1]), p=pi[choose_i])
+        coord = sample(e[choose_i, 0],
+                       mu1[choose_i, g], mu2[choose_i, g],
+                       std1[choose_i, g], std2[choose_i, g],
+                       rho[choose_i, g])
 
-        thresh = phi[:, -1] > 5 * np.max(phi[:, :-1])
+        coord = coord[None] * bc
+        coord = coord[None]
+        coords += [coord]
+        stroke_data += [[mu1[choose_i, g], mu2[choose_i, g],
+                         std1[choose_i, g], std2[choose_i, g], rho[choose_i, g], coord[-1, choose_i, 2]]]
+
+        att_w_init_np = att_w[-1]
+        att_k_init_np = att_k[-1]
+        att_h_init_np = att_h[-1]
+        att_c_init_np = att_c[-1]
+        h1_init_np = h1[-1]
+        c1_init_np = c1[-1]
+        h2_init_np = h2[-1]
+        c2_init_np = c2[-1]
+
+        thresh = phi[-1, choose_i, -1] > 7.5 * np.max(phi[-1, choose_i, :-1])
         #thresh = mu1.mean() > 1.1 * len(text)
         #thresh = finish[0, 0] > 0.9
+
         if not args.force and thresh:
             print('\nFinished sampling!\n')
             break
 
-    coords = np.array(coords)
+    # becomes (len, 1, batch_size, 3)
+    coords = np.array(coords)[:, 0, choose_i]
     coords[-1, 2] = 1.
-
     return phi_data, window_data, kappa_data, stroke_data, coords
 
 
