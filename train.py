@@ -91,6 +91,11 @@ def create_graph(num_letters, batch_size,
             in_coordinates = coordinates[:-1, :, :]
             in_coordinates_mask = coordinates_mask[:-1]
             out_coordinates = coordinates[1:, :, :]
+            #noise = tf.random_normal(tf.shape(out_coordinates), seed=random_state.randint(5000))
+            #noise_pwr = tf.sqrt(tf.reduce_sum(tf.square(out_coordinates[:, :, :-1]), axis=-1)) / 2.
+            #out_coordinates_part = noise_pwr[:, :, None] * noise[:, :, :-1] + out_coordinates[:, :, :-1]
+            #out_coordinates = tf.concat([out_coordinates_part, out_coordinates[:, :, -1][:, :, None]],
+            #                            axis=-1)
             out_coordinates_mask = coordinates_mask[1:]
 
             def step(inp_t, inp_mask_t,
