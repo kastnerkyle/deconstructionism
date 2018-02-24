@@ -14,6 +14,9 @@ from matplotlib import animation
 from collections import namedtuple
 import time
 
+# wiggly boi
+# python -u generate.py --model=summary/experiment-32/models/model-7 --text="stop sampling and get back to work" --seed=172 --stop_scale=7.5 --color=k
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', dest='model_path', type=str, default=os.path.join('pretrained', 'model-29'))
 parser.add_argument('--text', dest='text', type=str, default=None)
